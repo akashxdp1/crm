@@ -1,97 +1,74 @@
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 import pandas as pd
-import os
 
-# File setup
-FILE_NAME = 'leads_data.csv'
-REQUIRED_COLS = ['First Name', 'Last Name', 'Email', 'Phone', 'Company', 'Address']
+# Page config
+st.set_page_config(layout="wide", page_title="HMA Live CRM", page_icon="🌐")
 
-st.set_page_config(layout="wide", page_title="Live Website CRM")
+# --- GOOGLE SHEETS CONNECTION ---
+# This connects to the sheet you will define in your Streamlit Secrets
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- DATABASE ENGINE ---
 def load_data():
-    if not os.path.isfile(FILE_NAME):
-        return pd.DataFrame(columns=REQUIRED_COLS)
-    try:
-        df = pd.read_csv(FILE_NAME)
-        # Ensure correct columns
-        for col in REQUIRED_COLS:
-            if col not in df.columns:
-                df[col] = ""
-        return df[REQUIRED_COLS].fillna("")
-    except:
-        return pd.DataFrame(columns=REQUIRED_COLS)
+    return conn.read(worksheet="Sheet1", ttl="0") # ttl=0 ensures we always see the freshest data
 
 def save_data(df):
-    df.to_csv(FILE_NAME, index=False)
+    conn.update(worksheet="Sheet1", data=df)
 
-# --- WEBHOOK / API LOGIC ---
-# This part checks the URL for incoming data from your website
-query_params = st.query_params
-
-if "fname" in query_params:
-    # Get data from URL: ?fname=John&lname=Doe&email=test@test.com
-    new_entry = {
-        'First Name': query_params.get("fname", ""),
-        'Last Name': query_params.get("lname", ""),
-        'Email': query_params.get("email", ""),
-        'Phone': query_params.get("phone", ""),
-        'Company': query_params.get("company", ""),
-        'Address': query_params.get("address", "")
+# --- LIVE API LISTENER ---
+params = st.query_params
+if "email" in params:
+    new_lead = {
+        'First Name': params.get("fname", ""),
+        'Last Name': params.get("lname", ""),
+        'Email': params.get("email", ""),
+        'Phone': params.get("phone", ""),
+        'Company': params.get("company", ""),
+        'Address': params.get("address", "")
     }
     
-    current_df = load_data()
-    # Check if email already exists to prevent duplicates
-    if new_entry['Email'] not in current_df['Email'].values:
-        new_row = pd.DataFrame([new_entry])
-        updated_df = pd.concat([current_df, new_row], ignore_index=True)
-        save_data(updated_df)
-        # Clear params after saving
+    df = load_data()
+    # Check for duplicates
+    if new_lead['Email'] not in df['Email'].values:
+        new_row = pd.DataFrame([new_lead])
+        df = pd.concat([df, new_row], ignore_index=True)
+        save_data(df)
         st.query_params.clear()
-        st.toast("New Lead Added from Website!")
+        st.toast(f"New Lead: {new_lead['First Name']} added!")
         st.rerun()
 
 # --- UI ---
-st.title("🌐 Website Integrated CRM")
+st.title("🚀 HMA Website CRM")
 df = load_data()
 
-tab1, tab2, tab3 = st.tabs(["📋 Lead Pipeline", "➕ Manual Add", "⚙️ API Integration Details"])
+tab1, tab2, tab3 = st.tabs(["📋 Lead Pipeline", "➕ Manual Add", "🔗 Your API Link"])
 
 with tab1:
     search = st.text_input("🔍 Search Leads...")
-    display_df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)] if search else df
-    
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
-    
-    if st.button("Refresh Data"):
+    if search:
+        df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)]
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    if st.button("🔄 Refresh Data"):
         st.rerun()
 
 with tab2:
     with st.form("manual_form", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            fn = st.text_input("First Name")
-            ln = st.text_input("Last Name")
+        col1, col2 = st.columns(2)
+        with col1:
+            fn, ln = st.text_input("First Name"), st.text_input("Last Name")
             em = st.text_input("Email")
-        with c2:
-            ph = st.text_input("Phone")
-            cp = st.text_input("Company")
+        with col2:
+            ph, cp = st.text_input("Phone"), st.text_input("Company")
             ad = st.text_input("Address")
         
-        if st.form_submit_button("Add Lead"):
-            new_row = pd.DataFrame([[fn, ln, em, ph, cp, ad]], columns=REQUIRED_COLS)
+        if st.form_submit_button("Save Lead"):
+            new_row = pd.DataFrame([[fn, ln, em, ph, cp, ad]], columns=df.columns)
             df = pd.concat([df, new_row], ignore_index=True)
             save_data(df)
-            st.success("Saved!")
-            st.rerun()
+            st.success("Saved to Google Sheets!")
 
 with tab3:
-    st.header("Connect Your Website")
-    st.write("To send leads from your website form to this CRM, set your form's 'Redirect' or 'Webhook' URL to:")
-    
-    # This automatically detects your app's URL
-    base_url = "http://localhost:8501" # Change this to your public URL when hosted
-    api_example = f"{base_url}/?fname=VALUE&lname=VALUE&email=VALUE&phone=VALUE"
-    
-    st.code(api_example)
-    st.info("When a user submits a form, your website should send a GET request to this URL with the data filled in.")
+    st.subheader("Your Personal Webhook URL")
+    st.write("Use this URL in your website form's redirect/webhook setting:")
+    webhook_url = f"https://hma-crm.streamlit.app/?fname=VALUE&lname=VALUE&email=VALUE&phone=VALUE&company=VALUE&address=VALUE"
+    st.code(webhook_url)
